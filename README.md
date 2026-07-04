@@ -27,12 +27,7 @@ Welcome to the repository of my personal portfolio website. This project is a hi
 
 ---
 
-# 🚀 Copy-Pasteable GitHub Profile README
 
-> [!TIP]
-> You can copy the raw markdown text inside the block below and paste it directly into the repository named after your GitHub username (e.g. `your-username/your-username` README.md) to showcase this beautiful bio on your main GitHub profile page!
-
-```markdown
 # 🌌 Hi, I'm Harsh Raj! 
 
 I'm a B.Tech Computer Science student at JECRC Foundation (Class of '29) who bridges the gap between clean code and high-end design. I design the pixels and ship the code behind them.
