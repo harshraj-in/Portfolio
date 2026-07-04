@@ -2,7 +2,7 @@
 
 Welcome to the repository of my personal portfolio website. This project is a high-fidelity, interactive 3D web experience built to showcase the intersection of computer science, creative graphic design, and modern web engineering.
 
-🔗 **Live Link:** [harshraj.dev (or your custom domain)](#)
+🔗 **Live Link:** https://portfolio-iota-six-r36ipvt1hr.vercel.app/
 
 ---
 
