@@ -8,10 +8,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="https://unpkg.com/lenis@1.1.13/dist/lenis.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" defer></script>
+<script src="https://unpkg.com/lenis@1.1.13/dist/lenis.min.js" defer></script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -29,7 +29,6 @@
 
 <!-- OVERLAYS -->
 <div class="vignette"></div>
-<div class="grain"></div>
 <div class="scroll-progress" id="scrollProgress"></div>
 
 <!-- CURSOR -->
@@ -367,10 +366,11 @@
 const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const hasHover = window.matchMedia('(hover: hover)').matches;
 const isSmall = window.innerWidth < 900;
+const isMobile = isSmall || !hasHover || ('ontouchstart' in window);
 
 /* ============ SMOOTH SCROLL (LENIS) ============ */
 let lenis;
-if(!reduced && window.Lenis){
+if(!reduced && !isMobile && window.Lenis){
   lenis = new Lenis({
     duration: 1.2,
     easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
@@ -378,18 +378,19 @@ if(!reduced && window.Lenis){
     touchMultiplier: 1.2
   });
 
-  function raf(time) {
-    lenis.raf(time);
-    requestAnimationFrame(raf);
-  }
-  requestAnimationFrame(raf);
-
+  /* Let GSAP ticker drive Lenis — single RAF loop, no double-pump */
   if(window.ScrollTrigger){
     lenis.on('scroll', ScrollTrigger.update);
     gsap.ticker.add((time) => {
       lenis.raf(time * 1000);
     });
     gsap.ticker.lagSmoothing(0);
+  } else {
+    function raf(time) {
+      lenis.raf(time);
+      requestAnimationFrame(raf);
+    }
+    requestAnimationFrame(raf);
   }
 
   // Smooth scroll to anchors
@@ -442,13 +443,14 @@ const cursorLabel = document.getElementById('cursorLabel');
 let mx=0, my=0, rx=0, ry=0;
 
 if(hasHover && !isSmall){
+  /* Use transform instead of left/top for GPU-accelerated cursor */
   window.addEventListener('mousemove', e=>{
     mx = e.clientX; my = e.clientY;
-    dot.style.left = mx+'px'; dot.style.top = my+'px';
-  });
+    dot.style.transform = `translate(${mx - 3}px, ${my - 3}px)`;
+  }, {passive:true});
   function ringLoop(){
     rx += (mx-rx)*0.12; ry += (my-ry)*0.12;
-    ring.style.left = rx+'px'; ring.style.top = ry+'px';
+    ring.style.transform = `translate(${rx - 22}px, ${ry - 22}px)`;
     requestAnimationFrame(ringLoop);
   }
   ringLoop();
@@ -630,28 +632,35 @@ if(hasHover && !reduced){
 }
 
 /* ============================================================
-   THREE.JS IMMERSIVE 3D SCENE
+   THREE.JS IMMERSIVE 3D SCENE — DEFERRED UNTIL AFTER PRELOADER
+   Advanced: crystal color-cycling, mouse-reactive tilt, pulsing
+   particles, dynamic fog, scroll-burst shard reactions
    ============================================================ */
-if(window.THREE && !reduced){
+function initThreeScene(){
+  if(!window.THREE || reduced || isMobile) return;
+
   const canvas = document.getElementById('scene-canvas');
-  const renderer = new THREE.WebGLRenderer({ canvas, alpha:true, antialias:true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  const renderer = new THREE.WebGLRenderer({ canvas, alpha:true, antialias:false });
+  renderer.setPixelRatio(1); /* Force 1x pixel ratio to drastically reduce fill-rate bottleneck */
   renderer.setSize(window.innerWidth, window.innerHeight);
 
   const scene = new THREE.Scene();
-  scene.fog = new THREE.FogExp2(0x0a0c14, isSmall ? 0.025 : 0.03);
+  scene.fog = new THREE.FogExp2(0x0a0c14, 0.03);
 
   const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 100);
   camera.position.set(0, 0, 14);
 
-  function onResize(){
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-  }
-  window.addEventListener('resize', onResize);
+  let resizeTimer;
+  window.addEventListener('resize', ()=>{
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(()=>{
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+    }, 150);
+  });
 
-  /* --- LIGHTS --- */
+  /* --- LIGHTS (full 3-light setup) --- */
   const ambientLight = new THREE.AmbientLight(0x222233, 0.35);
   scene.add(ambientLight);
 
@@ -667,14 +676,14 @@ if(window.THREE && !reduced){
   lightIce.position.set(0, 4, -3);
   scene.add(lightIce);
 
-  /* --- MAIN CRYSTAL (icosahedron) --- */
+  /* --- MAIN CRYSTAL (icosahedron — hero element, uses StandardMaterial) --- */
   const crystalGeo = new THREE.IcosahedronGeometry(2.2, 1);
-  const crystalFill = new THREE.Mesh(crystalGeo, new THREE.MeshPhysicalMaterial({
-    color: 0x6c5ce7, transparent:true, opacity:0.35, roughness:0.1, metalness:0.1, transmission:0.6, ior:1.5, thickness:2.5, specularIntensity:1.0, specularColor: new THREE.Color(0xffffff), side:THREE.DoubleSide
+  const crystalFill = new THREE.Mesh(crystalGeo, new THREE.MeshStandardMaterial({
+    color: 0x6c5ce7, transparent:true, opacity:0.35, roughness:0.15, metalness:0.3, side:THREE.FrontSide
   }));
+  const crystalEdgeMat = new THREE.LineBasicMaterial({ color:0x6c5ce7, transparent:true, opacity:0.5 });
   const crystalEdges = new THREE.LineSegments(
-    new THREE.EdgesGeometry(crystalGeo),
-    new THREE.LineBasicMaterial({ color:0x6c5ce7, transparent:true, opacity:0.5 })
+    new THREE.EdgesGeometry(crystalGeo), crystalEdgeMat
   );
   const crystalGroup = new THREE.Group();
   crystalGroup.add(crystalFill); crystalGroup.add(crystalEdges);
@@ -682,90 +691,43 @@ if(window.THREE && !reduced){
   scene.add(crystalGroup);
 
   /* --- NESTED ORBIT RINGS --- */
-  const ringGeo1 = new THREE.TorusGeometry(3.5, 0.012, 6, 64);
+  const ringGeo1 = new THREE.TorusGeometry(3.5, 0.012, 4, 48);
   const ringMesh1 = new THREE.Mesh(ringGeo1, new THREE.MeshBasicMaterial({ color: 0x4fc3f7, transparent: true, opacity: 0.16 }));
   ringMesh1.position.set(0.5, 0.3, 0);
   ringMesh1.rotation.x = Math.PI / 3;
   scene.add(ringMesh1);
 
-  const ringGeo2 = new THREE.TorusGeometry(3.8, 0.008, 6, 64);
+  const ringGeo2 = new THREE.TorusGeometry(3.8, 0.008, 4, 48);
   const ringMesh2 = new THREE.Mesh(ringGeo2, new THREE.MeshBasicMaterial({ color: 0xff5d73, transparent: true, opacity: 0.12 }));
   ringMesh2.position.set(0.5, 0.3, 0);
   ringMesh2.rotation.y = Math.PI / 4;
   scene.add(ringMesh2);
 
-  /* --- SHARD 1 (octahedron) --- */
-  const shard1Geo = new THREE.OctahedronGeometry(1.0, 0);
-  const shard1Fill = new THREE.Mesh(shard1Geo, new THREE.MeshPhysicalMaterial({
-    color:0xff5d73, transparent:true, opacity:0.3, roughness:0.1, metalness:0.1, transmission:0.5, ior:1.5, thickness:1.5, side:THREE.DoubleSide
-  }));
-  const shard1Edges = new THREE.LineSegments(
-    new THREE.EdgesGeometry(shard1Geo),
-    new THREE.LineBasicMaterial({ color:0xff5d73, transparent:true, opacity:0.45 })
-  );
-  const shard1Group = new THREE.Group();
-  shard1Group.add(shard1Fill); shard1Group.add(shard1Edges);
-  shard1Group.position.set(3.8, -1.4, -2);
-  scene.add(shard1Group);
+  /* --- Helper: create a shard with BasicMaterial (cheap) --- */
+  function makeShard(Geo, size, color, edgeColor, pos){
+    const geo = new Geo(size, 0);
+    const fill = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      color, transparent:true, opacity:0.22, side:THREE.FrontSide
+    }));
+    const edges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(geo),
+      new THREE.LineBasicMaterial({ color: edgeColor, transparent:true, opacity:0.4 })
+    );
+    const group = new THREE.Group();
+    group.add(fill); group.add(edges);
+    group.position.set(pos[0], pos[1], pos[2]);
+    scene.add(group);
+    return group;
+  }
 
-  /* --- SHARD 2 (tetrahedron) --- */
-  const shard2Geo = new THREE.TetrahedronGeometry(0.65, 0);
-  const shard2Fill = new THREE.Mesh(shard2Geo, new THREE.MeshPhysicalMaterial({
-    color:0x4fc3f7, transparent:true, opacity:0.3, roughness:0.1, metalness:0.1, transmission:0.55, ior:1.5, thickness:1.2, side:THREE.DoubleSide
-  }));
-  const shard2Edges = new THREE.LineSegments(
-    new THREE.EdgesGeometry(shard2Geo),
-    new THREE.LineBasicMaterial({ color:0x4fc3f7, transparent:true, opacity:0.4 })
-  );
-  const shard2Group = new THREE.Group();
-  shard2Group.add(shard2Fill); shard2Group.add(shard2Edges);
-  shard2Group.position.set(-3.2, 2.0, -3);
-  scene.add(shard2Group);
-
-  /* --- SHARD 3 (dodecahedron) --- */
-  const shard3Geo = new THREE.DodecahedronGeometry(0.8, 0);
-  const shard3Fill = new THREE.Mesh(shard3Geo, new THREE.MeshPhysicalMaterial({
-    color:0x6c5ce7, transparent:true, opacity:0.25, roughness:0.1, metalness:0.1, transmission:0.5, ior:1.5, thickness:1.2, side:THREE.DoubleSide
-  }));
-  const shard3Edges = new THREE.LineSegments(
-    new THREE.EdgesGeometry(shard3Geo),
-    new THREE.LineBasicMaterial({ color:0x9b8ce8, transparent:true, opacity:0.35 })
-  );
-  const shard3Group = new THREE.Group();
-  shard3Group.add(shard3Fill); shard3Group.add(shard3Edges);
-  shard3Group.position.set(2.5, 2.5, -4);
-  scene.add(shard3Group);
-
-  /* --- SHARD 4 (floating octahedron, coral) --- */
-  const shard4Geo = new THREE.OctahedronGeometry(0.5, 0);
-  const shard4Fill = new THREE.Mesh(shard4Geo, new THREE.MeshPhysicalMaterial({
-    color:0xff5d73, transparent:true, opacity:0.25, roughness:0.1, metalness:0.1, transmission:0.5, ior:1.5, thickness:1.0, side:THREE.DoubleSide
-  }));
-  const shard4Edges = new THREE.LineSegments(
-    new THREE.EdgesGeometry(shard4Geo),
-    new THREE.LineBasicMaterial({ color:0xff5d73, transparent:true, opacity:0.35 })
-  );
-  const shard4Group = new THREE.Group();
-  shard4Group.add(shard4Fill); shard4Group.add(shard4Edges);
-  shard4Group.position.set(-4.5, -2.5, -1);
-  scene.add(shard4Group);
-
-  /* --- SHARD 5 (floating tetrahedron, violet) --- */
-  const shard5Geo = new THREE.TetrahedronGeometry(0.6, 0);
-  const shard5Fill = new THREE.Mesh(shard5Geo, new THREE.MeshPhysicalMaterial({
-    color:0x6c5ce7, transparent:true, opacity:0.25, roughness:0.1, metalness:0.1, transmission:0.5, ior:1.5, thickness:1.0, side:THREE.DoubleSide
-  }));
-  const shard5Edges = new THREE.LineSegments(
-    new THREE.EdgesGeometry(shard5Geo),
-    new THREE.LineBasicMaterial({ color:0x9b8ce8, transparent:true, opacity:0.3 })
-  );
-  const shard5Group = new THREE.Group();
-  shard5Group.add(shard5Fill); shard5Group.add(shard5Edges);
-  shard5Group.position.set(-1.5, -3.5, -5);
-  scene.add(shard5Group);
+  const shard1Group = makeShard(THREE.OctahedronGeometry, 1.0, 0xff5d73, 0xff5d73, [3.8, -1.4, -2]);
+  const shard2Group = makeShard(THREE.TetrahedronGeometry, 0.65, 0x4fc3f7, 0x4fc3f7, [-3.2, 2.0, -3]);
+  const shard3Group = makeShard(THREE.DodecahedronGeometry, 0.8, 0x6c5ce7, 0x9b8ce8, [2.5, 2.5, -4]);
+  const shard4Group = makeShard(THREE.OctahedronGeometry, 0.5, 0xff5d73, 0xff5d73, [-4.5, -2.5, -1]);
+  const shard5Group = makeShard(THREE.TetrahedronGeometry, 0.6, 0x6c5ce7, 0x9b8ce8, [-1.5, -3.5, -5]);
 
   /* --- TORUS RING --- */
-  const torusGeo = new THREE.TorusGeometry(4.5, 0.015, 8, 80);
+  const torusGeo = new THREE.TorusGeometry(4.5, 0.015, 4, 48);
   const torusMesh = new THREE.Mesh(torusGeo, new THREE.MeshBasicMaterial({
     color:0xe8e6df, transparent:true, opacity:0.08
   }));
@@ -774,7 +736,7 @@ if(window.THREE && !reduced){
   scene.add(torusMesh);
 
   /* --- PARTICLE FIELD --- */
-  const particleCount = isSmall ? 150 : 500;
+  const particleCount = 280;
   const particleGeo = new THREE.BufferGeometry();
   const positions = new Float32Array(particleCount * 3);
   const colors = new Float32Array(particleCount * 3);
@@ -790,8 +752,7 @@ if(window.THREE && !reduced){
   particleGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   particleGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   const particleMat = new THREE.PointsMaterial({
-    size: isSmall ? 0.035 : 0.045,
-    transparent:true, opacity:0.6,
+    size: 0.045, transparent:true, opacity:0.6,
     vertexColors:true, sizeAttenuation:true
   });
   const particles = new THREE.Points(particleGeo, particleMat);
@@ -799,12 +760,12 @@ if(window.THREE && !reduced){
 
   /* --- CAMERA SPLINE PATH --- */
   const cameraPath = new THREE.CatmullRomCurve3([
-    new THREE.Vector3(0, 0, 14),       // Hero
-    new THREE.Vector3(3.5, 1.5, 12),   // About
-    new THREE.Vector3(-2.5, 2, 10.5),  // Skills
-    new THREE.Vector3(2, -1, 11.5),    // Work
-    new THREE.Vector3(-3.5, 0.5, 9),   // Journey
-    new THREE.Vector3(0, 0.5, 7),      // Contact
+    new THREE.Vector3(0, 0, 14),
+    new THREE.Vector3(3.5, 1.5, 12),
+    new THREE.Vector3(-2.5, 2, 10.5),
+    new THREE.Vector3(2, -1, 11.5),
+    new THREE.Vector3(-3.5, 0.5, 9),
+    new THREE.Vector3(0, 0.5, 7),
   ]);
 
   /* scroll-driven camera and scroll speed tracking */
@@ -825,13 +786,17 @@ if(window.THREE && !reduced){
 
   /* --- LIGHT COLOR TRANSITIONS --- */
   const lightStates = [
-    { v:1.8, c:1.2, i:0.9 }, // hero
-    { v:1.2, c:0.8, i:1.6 }, // about (ice dominant)
-    { v:1.6, c:1.5, i:0.6 }, // skills (warm)
-    { v:1.8, c:0.9, i:1.0 }, // work (violet)
-    { v:0.8, c:1.4, i:1.2 }, // journey (coral+ice)
-    { v:1.4, c:1.6, i:0.7 }, // contact (coral warm)
+    { v:1.8, c:1.2, i:0.9 },
+    { v:1.2, c:0.8, i:1.6 },
+    { v:1.6, c:1.5, i:0.6 },
+    { v:1.8, c:0.9, i:1.0 },
+    { v:0.8, c:1.4, i:1.2 },
+    { v:1.4, c:1.6, i:0.7 },
   ];
+
+  /* --- DYNAMIC FOG DENSITY PER SECTION --- */
+  const fogDensities = [0.03, 0.025, 0.035, 0.028, 0.032, 0.02];
+
   function lerpLights(progress){
     const scaled = progress * (lightStates.length - 1);
     const idx = Math.floor(scaled);
@@ -841,63 +806,71 @@ if(window.THREE && !reduced){
     lightViolet.intensity = a.v + (b.v - a.v) * t;
     lightCoral.intensity  = a.c + (b.c - a.c) * t;
     lightIce.intensity    = a.i + (b.i - a.i) * t;
+
+    const fa = fogDensities[Math.min(idx, fogDensities.length-1)];
+    const fb = fogDensities[Math.min(idx+1, fogDensities.length-1)];
+    scene.fog.density = fa + (fb - fa) * t;
   }
 
   /* --- MOUSE PARALLAX --- */
-  let mx3=0, my3=0;
+  let mx3=0, my3=0, targetMx=0, targetMy=0;
   if(hasHover){
     window.addEventListener('mousemove', e=>{
-      mx3 = (e.clientX / window.innerWidth - 0.5);
-      my3 = (e.clientY / window.innerHeight - 0.5);
-    });
+      targetMx = (e.clientX / window.innerWidth - 0.5);
+      targetMy = (e.clientY / window.innerHeight - 0.5);
+    }, {passive:true});
   }
 
-  /* --- COORDS DISPLAY --- */
   const coordX = document.getElementById('coordX');
   const coordY = document.getElementById('coordY');
   const coordZ = document.getElementById('coordZ');
 
+  const hslColor = { h:0.72, s:0.72, l:0.63 };
+
   /* --- RENDER LOOP --- */
   const lookAtTarget = new THREE.Vector3(0.5, 0.2, 0);
   let speedMult = 1;
+  let frameCount = 0;
+  let lastScrollProgress = -1;
 
-  function animate(){
+  function animate(timestamp){
     requestAnimationFrame(animate);
+    const time = timestamp * 0.0015;
 
-    /* scroll-driven camera */
+    mx3 += (targetMx - mx3) * 0.05;
+    my3 += (targetMy - my3) * 0.05;
+
     const pathPoint = cameraPath.getPointAt(scrollProgress);
     camera.position.lerp(pathPoint, 0.04);
 
-    /* mouse parallax offset */
-    camera.position.x += (mx3 * 1.0 - 0) * 0.01;
-    camera.position.y += (-my3 * 0.8 - 0) * 0.01;
-
+    camera.position.x += mx3 * 1.0 * 0.01;
+    camera.position.y += -my3 * 0.8 * 0.01;
     camera.lookAt(lookAtTarget);
 
-    /* decay scroll velocity speed multiplier */
-    scrollVelocity += (0 - scrollVelocity) * 0.06;
-    speedMult = 1 + scrollVelocity * 8; // increases up to 8x speed
+    scrollVelocity *= 0.94;
+    speedMult = 1 + scrollVelocity * 8;
 
-    /* rotate shapes with scroll velocity multiplier */
-    crystalGroup.rotation.x += 0.0018 * speedMult;
-    crystalGroup.rotation.y += 0.0028 * speedMult;
+    const targetRotX = crystalGroup.rotation.x + 0.0018 * speedMult;
+    const targetRotY = crystalGroup.rotation.y + 0.0028 * speedMult;
+    crystalGroup.rotation.x = targetRotX + my3 * 0.15;
+    crystalGroup.rotation.y = targetRotY + mx3 * 0.15;
+
+    hslColor.h = 0.72 + Math.sin(time * 0.12) * 0.08;
+    crystalEdgeMat.color.setHSL(hslColor.h, hslColor.s, hslColor.l);
 
     ringMesh1.rotation.z += 0.003 * speedMult;
     ringMesh2.rotation.x -= 0.002 * speedMult;
 
-    shard1Group.rotation.x -= 0.0025 * speedMult;
+    const burst = Math.min(scrollVelocity * 3, 0.5);
+    shard1Group.rotation.x -= (0.0025 + burst * 0.01) * speedMult;
     shard1Group.rotation.y -= 0.0035 * speedMult;
-
     shard2Group.rotation.x += 0.003 * speedMult;
-    shard2Group.rotation.y -= 0.002 * speedMult;
-
+    shard2Group.rotation.y -= (0.002 + burst * 0.008) * speedMult;
     shard3Group.rotation.x += 0.0015 * speedMult;
     shard3Group.rotation.y += 0.0025 * speedMult;
     shard3Group.rotation.z += 0.001 * speedMult;
-
-    shard4Group.rotation.x += 0.002 * speedMult;
+    shard4Group.rotation.x += (0.002 + burst * 0.012) * speedMult;
     shard4Group.rotation.z -= 0.003 * speedMult;
-
     shard5Group.rotation.y -= 0.003 * speedMult;
     shard5Group.rotation.x += 0.001 * speedMult;
 
@@ -907,23 +880,27 @@ if(window.THREE && !reduced){
     particles.rotation.y += 0.00025 * speedMult;
     particles.rotation.x += 0.0001 * speedMult;
 
-    /* main crystal organic breathing animation */
-    const time = Date.now() * 0.0015;
+    particleMat.opacity = 0.5 + Math.sin(time * 0.3) * 0.12;
+
     const crystalScale = 1 + Math.sin(time * 0.4) * 0.04;
     crystalGroup.scale.set(crystalScale, crystalScale, crystalScale);
 
-    /* floating motion for shards */
+    /* floating shards */
     shard1Group.position.y = -1.4 + Math.sin(time * 0.6) * 0.3;
     shard2Group.position.y = 2.0 + Math.sin(time * 0.8 + 1) * 0.25;
     shard3Group.position.y = 2.5 + Math.sin(time * 0.5 + 2) * 0.2;
     shard4Group.position.y = -2.5 + Math.sin(time * 0.7 + 3) * 0.35;
     shard5Group.position.y = -3.5 + Math.sin(time * 0.5 + 4) * 0.25;
 
-    /* update light intensities based on scroll */
-    lerpLights(scrollProgress);
+    /* only lerp lights if scroll actually changed */
+    if (Math.abs(scrollProgress - lastScrollProgress) > 0.0001) {
+      lerpLights(scrollProgress);
+      lastScrollProgress = scrollProgress;
+    }
 
-    /* update coords display */
-    if(coordX){
+    /* coords — every 30th frame to prevent DOM thrashing */
+    frameCount++;
+    if(coordX && (frameCount % 30 === 0)){
       coordX.textContent = 'x: ' + camera.position.x.toFixed(2);
       coordY.textContent = 'y: ' + camera.position.y.toFixed(2);
       coordZ.textContent = 'z: ' + camera.position.z.toFixed(2);
@@ -931,9 +908,26 @@ if(window.THREE && !reduced){
 
     renderer.render(scene, camera);
   }
-  animate();
 
-} /* end THREE.js block */
+  renderer.render(scene, camera);
+  requestAnimationFrame(animate);
+}
+
+const preloaderEl = document.getElementById('preloader');
+if(preloaderEl){
+  const observer = new MutationObserver((mutations)=>{
+    for(const m of mutations){
+      if(preloaderEl.classList.contains('done')){
+        observer.disconnect();
+        setTimeout(initThreeScene, 300);
+        break;
+      }
+    }
+  });
+  observer.observe(preloaderEl, { attributes:true, attributeFilter:['class'] });
+} else {
+  initThreeScene();
+}
 
 </script>
 </body>
